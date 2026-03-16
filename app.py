@@ -11,6 +11,7 @@ try:
     import torch
     import torch.nn as nn
     import joblib
+    import threading
     HAS_ML_DEPS = True
 except ImportError:
     HAS_ML_DEPS = False
@@ -18,6 +19,10 @@ except ImportError:
 
 app = Flask(__name__)
 CORS(app)
+
+# Thread safety for lazy loading
+model_lock = threading.Lock()
+models_loaded = False
 
 # Load Models
 MODEL_DIR = 'models'
@@ -59,9 +64,12 @@ class DigitCNN(nn.Module if HAS_ML_DEPS else object):
         return x
 
 def load_all_models():
-    global pca_transformer, lr_model, pytorch_model
-    if not HAS_ML_DEPS:
+    global pca_transformer, lr_model, pytorch_model, models_loaded
+    if not HAS_ML_DEPS or models_loaded:
         return
+    
+    with model_lock:
+        if models_loaded: return
     try:
         print(f"Loading models from {os.path.abspath(MODEL_DIR)}...")
         
@@ -91,34 +99,14 @@ def load_all_models():
             print("--- DEEP LEARNING MODEL READY ---")
         elif pca_transformer and lr_model:
             print("--- CLASSICAL FALLBACK READY ---")
-    except Exception as e:
-        print(f"Error loading models: {e}")
-
-        pca_path = os.path.join(MODEL_DIR, 'pca_transformer.pkl')
-        if os.path.exists(pca_path):
-            pca_transformer = joblib.load(pca_path)
-            print("Successfully loaded PCA transformer.")
-        else:
-            print(f"CRITICAL: {pca_path} not found.")
             
-        lr_path = os.path.join(MODEL_DIR, 'lr_model.pkl')
-        if os.path.exists(lr_path):
-            lr_model = joblib.load(lr_path)
-            print("Successfully loaded Logistic Regression model.")
-        else:
-            print(f"CRITICAL: {lr_path} not found.")
-            
-        if cnn_extractor and pca_transformer and lr_model:
-            print("--- ALL MODELS READY ---")
-        else:
-            print(f"--- MODEL LOAD STATUS: CNN={bool(cnn_extractor)}, PCA={bool(pca_transformer)}, LR={bool(lr_model)} ---")
+        models_loaded = True
     except Exception as e:
         print(f"Exception during load_all_models: {e}")
         import traceback
         traceback.print_exc()
 
-# Call load on startup
-load_all_models()
+# Removed top-level load_all_models() to prevent startup timeouts
 
 def preprocess_image(base64_string):
     """ Converts base64 image from canvas to normalized numpy array. """
@@ -149,12 +137,21 @@ def preprocess_image(base64_string):
 def home():
     return render_template('index.html')
 
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy', 'models_loaded': models_loaded})
+
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
         data = request.get_json()
         if 'image' not in data:
             return jsonify({'error': 'No image data provided'}), 400
+            
+        # Lazy load models on the first request
+        if not models_loaded:
+            print("First request received. Lazy loading models...")
+            load_all_models()
             
         if not (pytorch_model or (pca_transformer and lr_model)):
             return jsonify({'error': 'Models are not loaded properly on the server.'}), 503
