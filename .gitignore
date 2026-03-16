@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Data and Models
+data/
+models/*.pkl
+models/*.tflite
+# models/digit_cnn.pth # We actually WANT to include this small model file
+
+# Artifacts & System
+.DS_Store
+*.log
+verify_api.py
+retrain.py
+train_cnn.py
